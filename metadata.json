@@ -1,0 +1,6 @@
+{
+  "name": "Manyfast",
+  "description": "관심사 기반 소셜 네트워킹 및 커피챗 매칭 앱을 위한 빠른 PRD 및 기능 명세서 기획 플랫폼",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
