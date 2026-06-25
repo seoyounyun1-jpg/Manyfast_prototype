@@ -325,61 +325,132 @@ export default function App() {
   const [specSubLayout, setSpecSubLayout] = useState<'document' | 'mindmap'>('document');
   const [selectedMindmapNode, setSelectedMindmapNode] = useState<string>('req-1');
 
-  // AI Decision Coach panel states
+  // Context Guide panel states
   const [coachOpen, setCoachOpen] = useState<boolean>(false);
   const [coachPinned, setCoachPinned] = useState<boolean>(false);
-  const [coachActiveTab, setCoachActiveTab] = useState<'comment' | 'risk' | 'bench'>('comment');
-  const [coachChatInput, setCoachChatInput] = useState<string>('');
-  const [coachAnswers, setCoachAnswers] = useState<string[]>([
-    "Manny Coach: 분석해 본 결과 '관심사 기반 매칭'의 우선순위는 매우 합당합니다. 다만 매칭 노쇼율을 억제하기 위해 가벼운 페널티 가이드를 수용 기준(AC)에 적용해보시는 것을 권장합니다."
-  ]);
 
-  // Dynamic Real-time Coach Analysis State backed by Gemini 3.5 Flash
-  const [coachAnalysis, setCoachAnalysis] = useState<any>({
-    facts: [
+  // ① 시장 데이터 카드
+  const [marketDataOpen, setMarketDataOpen] = useState<boolean>(true);
+  const [marketData, setMarketData] = useState<{target: string; trend: string; competitorWeakness: string; sources?: {label: string; url: string}[]} | null>(null);
+  const [marketDataLoading, setMarketDataLoading] = useState<boolean>(false);
+
+  // ② 판단 기준 체크리스트
+  type CheckStatus = 'ok' | 'review' | 'poor';
+  const CHECKLIST_ITEMS: Record<string, {label: string; tooltip: string; example: string; prdCheck: (doc: typeof prdDoc) => string}[]> = {
+    'PRD': [
       {
-        claim: "매칭 네트워크 환경에서 빈 타임 캘린더 예약을 조율하는 단계가 사용성이 가장 까다롭고 이탈이 큰 지점입니다.",
-        source: "Industry heuristic (unverified)"
+        label: '문제 정의가 구체적으로 작성되었는가',
+        tooltip: '문제의 원인과 당사자 맥락을 명시해야 우선순위와 범위가 정리됩니다. 실제 사용자 인터뷰 문장으로 작성하면 검증성이 높아집니다.',
+        example: '📌 Notion의 PRD 템플릿은 "누가, 어떤 상황에서, 왜 막히는가"를 3줄 이내로 작성하도록 강제합니다.',
+        prdCheck: (doc) => {
+          const problem = doc.sections?.overview?.problem || doc.sections?.overview?.goal || '';
+          if (!problem || problem.length < 20) return '⚠️ 보완 필요: 문제 설명이 너무 짧거나 없습니다. 구체적인 사용자 상황과 불편함을 추가해 주세요.';
+          if (!/사용자|유저|고객|누가|어떤/.test(problem)) return '⚠️ 보완 필요: 문제가 누구의 문제인지 명시되지 않았습니다. 당사자를 구체적으로 기술해 주세요.';
+          return '✅ 충족: 문제 정의에 맥락이 포함되어 있습니다.';
+        }
       },
       {
-        claim: "초기 타겟 직장인 소셜 네트워킹은 노쇼 처벌 페널티 없이는 단순 신청 횟수가 성사율로 전이되기 힘듭니다.",
-        source: "User-provided"
-      }
-    ],
-    assumptions: [
-      {
-        assumption: "사용자들이 추천 목록 갱신을 위해 상시로 매니패스트 프로필에 성실하고 풍부한 관심 태그를 기동할 것이다.",
-        risk: "High",
-        validationSuggestion: "실제 이직/커리어 모임 직장인 15명을 상대로, 가입 프로필 태그 3개 초과 기입 시 이탈률 허들 진단."
-      }
-    ],
-    recommendations: [
-      {
-        action: "Add AC: 캘린더 연동 실패 및 스케줄링 충돌 시, 시스템이 카카오톡 푸시/알림톡 연계 수동 조율용 예약 대기 슬롯 링크를 발행한다.",
-        target: "AC",
-        rationale: "스케줄링 충돌이 발생하면 기획 상 별도의 복구 플로우가 부재하여 사용자는 그 즉시 이탈(Churn)하는 결과를 낳기 때문입니다.",
-        confidence: "Heuristic"
+        label: '타겟 사용자가 구체적으로 정의되었는가',
+        tooltip: '페르소나 1명을 구체적으로 정의하면 기능 우선순위 판단이 빨라집니다. 직군·목표·불편함 3가지를 포함하는 것이 좋습니다.',
+        example: '📌 Airbnb는 내부 PRD에 페르소나를 1명으로 제한하고 "여행 목적·숙박 예산·결정 장벽" 3가지를 필수 기재합니다.',
+        prdCheck: (doc) => {
+          const target = doc.sections?.overview?.targetUser || doc.sections?.overview?.goal || '';
+          if (!target || target.length < 15) return '⚠️ 보완 필요: 타겟 사용자 설명이 없거나 너무 짧습니다. 직군·목표·불편함을 구체적으로 작성해 주세요.';
+          if (/모든|누구나|전체|everybody/.test(target)) return '⚠️ 보완 필요: 타겟이 너무 광범위합니다. 특정 사용자 그룹으로 좁혀 주세요.';
+          return '✅ 충족: 타겟 사용자가 구체적으로 정의되어 있습니다.';
+        }
       },
       {
-        action: "Update PRD Problem: 커피챗 탐색 자체의 편의보다 최종 오프라인/온라인 예약 성사 시점의 시간 비동기 마찰과 약속 미이행 리스크를 핵심 과제로 설정한다.",
-        target: "PRD",
-        rationale: "PM이 명문화하고 있는 core metrics가 단순히 가입 및 커피챗 신청 횟수(Proxy metric)에 매료되어, 약속 노쇼라는 실질 성사율 변수를 간과하고 있기 때문.",
-        confidence: "Verified"
-      }
-    ],
-    challenges: [
-      {
-        question: "사용자들이 이 서비스에 대해 1회 커피챗당 실제 가치(WTP)를 단 1,000원이라도 지불할 행동 유인이 있는가? 무료 매칭만 소모 후 종료될 위험은 없나?",
-        category: "WTP"
+        label: '성공 지표가 수치로 설정되었는가',
+        tooltip: '측정 가능한 지표(예: 7일 리텐션 40%)를 설정해야 합니다. "만족도 향상" 같은 모호한 표현은 실제 검증이 불가능합니다.',
+        example: '📌 Toss는 모든 기능의 성공 지표를 출시 전 "기준값 / 목표값 / 측정 방법" 3가지로 반드시 명시합니다.',
+        prdCheck: (doc) => {
+          const metrics = doc.sections?.overview?.successMetrics || doc.sections?.overview?.goal || '';
+          if (!metrics || metrics.length < 10) return '⚠️ 보완 필요: 성공 지표가 없습니다. 숫자 기반의 측정 가능한 목표를 추가해 주세요.';
+          if (!/\d|%|명|건|율|DAU|WAU|MAU|리텐션|전환/.test(metrics)) return '⚠️ 보완 필요: 지표에 숫자가 없습니다. 구체적인 수치 목표로 바꿔 주세요.';
+          return '✅ 충족: 수치 기반 성공 지표가 설정되어 있습니다.';
+        }
       },
-      { question: "현재 타겟인 '모든 직장인'은 너무 넓다. 초기 핵심 지지층 100명을 모을 구체적 틈새 시장(Niche)은 어디인가?", category: "TAM" },
-      { question: "링크드인이나 기존 오픈채팅방과 비교했을 때, 사용자가 굳이 이 앱을 깔아야 할 압도적인 차별화 포인트가 있는가?", category: "Competitor" },
-      { question: "사용자가 관심사를 등록한다고 해서, 실제로 오프라인/온라인 만남까지 이어질 것이라는 가정은 어떻게 검증할 것인가?", category: "Assumption" },
-      { question: "수익 모델이 광고나 프리미엄 매칭이라면, 그를 지탱할 만큼의 MAU 성장을 위해 CAC(고객 획득 비용)를 어떻게 감당할 것인가?", category: "WTP" }
     ],
-    coachSummary: "현재 설계된 관심사 대칭 및 매칭 프로세스는 깔끔하나, 캘린더 마찰 시 예외 대안(AC)이 비어있어 이탈 가능성이 막대합니다. 디시전 코치가 제시한 리스크 기반 검토 항목을 확인하고, 우측 추천 상자를 클릭해 기획 문서에 일괄 자동 적용하십시오."
-  });
-  const [coachLoading, setCoachLoading] = useState<boolean>(false);
+    '기능명세서': [
+      {
+        label: '기능 간 의존 관계와 실행 순서가 명확한가',
+        tooltip: 'A 기능이 완료돼야 B 기능이 동작하는 의존 관계를 명시해야 개발 순서가 정해집니다.',
+        example: '📌 Figma는 기능명세서에 "선행 기능(Prerequisite)" 항목을 필수 필드로 지정해 의존 관계를 명시합니다.',
+        prdCheck: (doc) => {
+          const features = doc.sections?.features || [];
+          if (!features || features.length < 2) return '⚠️ 보완 필요: 기능이 2개 미만이라 의존 관계를 파악하기 어렵습니다.';
+          return '✅ 확인 필요: 각 기능의 선행 조건이 명시되어 있는지 검토해 주세요.';
+        }
+      },
+      {
+        label: '핵심 기능과 부가 기능이 구분되어 있는가',
+        tooltip: 'MoSCoW 기법(Must/Should/Could/Won\'t)으로 분류하면 개발자와 우선순위 합의가 빨라집니다.',
+        example: '📌 Notion은 기능명세서 템플릿에 Priority 컬럼을 기본 제공하고, P0·P1·P2로 등급을 나눕니다.',
+        prdCheck: (doc) => {
+          const features = doc.sections?.features || [];
+          if (!features || features.length === 0) return '⚠️ 보완 필요: 기능 목록 자체가 없습니다. 기능명세서에 항목을 추가해 주세요.';
+          return '✅ 확인 필요: 각 기능에 Must/Should/Could 우선순위가 표시되어 있는지 검토해 주세요.';
+        }
+      },
+      {
+        label: '오류·예외 상황이 사전에 정의되어 있는가',
+        tooltip: '실패 케이스와 예외 상황을 기획 단계에서 미리 정의하면 개발 단계 재작업이 줄어듭니다.',
+        example: '📌 Toss는 모든 기능명세서에 "What-if" 섹션을 의무화해 네트워크 오류·권한 없음·빈 결과를 반드시 기재합니다.',
+        prdCheck: (doc) => {
+          const features = doc.sections?.features || [];
+          if (!features || features.length === 0) return '⚠️ 보완 필요: 기능 목록이 없어 예외 상황을 정의할 수 없습니다.';
+          return '✅ 확인 필요: 각 기능에 오류 상황과 복구 흐름이 포함되어 있는지 검토해 주세요.';
+        }
+      },
+    ],
+    '유저플로우': [
+      {
+        label: '사용자 진입 경로가 2가지 이상 정의되었는가',
+        tooltip: '사용자가 기능에 도달하는 경로는 보통 2가지 이상입니다. 직접 탐색 외에 알림·공유 링크 진입도 커버해야 합니다.',
+        example: '📌 카카오는 유저플로우 작성 시 "직접 탐색 / 푸시 알림 / 공유 링크" 3가지 진입 경로를 기본으로 포함합니다.',
+        prdCheck: (doc) => {
+          const goal = doc.sections?.overview?.goal || '';
+          return goal ? '✅ 확인 필요: 유저플로우에 2가지 이상의 진입 경로가 포함되어 있는지 확인해 주세요.' : '⚠️ 보완 필요: PRD 목표가 없어 어떤 플로우를 커버해야 할지 불분명합니다.';
+        }
+      },
+      {
+        label: '오류 발생 시 복구 흐름이 포함되어 있는가',
+        tooltip: '정상 경로(Happy Path)만으로는 부족합니다. 네트워크 오류·권한 없음·빈 결과 등 실패 경로와 복구 흐름이 없으면 QA 단계에서 재작업이 발생합니다.',
+        example: '📌 당근마켓은 유저플로우에 오류 노드를 별도 색상(빨간색)으로 표기하고, 각 오류마다 복구 경로를 1개 이상 연결합니다.',
+        prdCheck: (doc) => {
+          const goal = doc.sections?.overview?.goal || '';
+          return goal ? '✅ 확인 필요: 플로우 노드에 오류/실패 분기가 명시되어 있는지 확인해 주세요.' : '⚠️ 보완 필요: PRD 목표 없이 오류 흐름을 정의하기 어렵습니다.';
+        }
+      },
+    ],
+    '와이어프레임': [
+      {
+        label: '핵심 CTA가 화면 상단 1/3 영역에 배치되어 있는가',
+        tooltip: '사용자 시선은 F자 패턴으로 움직이며 상단에 집중됩니다. 핵심 행동 유도 버튼이 하단에 있으면 전환율이 낮아집니다.',
+        example: '📌 Coupang은 "구매하기" CTA를 항상 화면 상단 30% 이내에 배치하고, 스크롤 시에도 고정 노출합니다.',
+        prdCheck: () => '✅ 확인 필요: 핵심 CTA(회원가입·구매·신청 버튼)가 화면 상단 영역에 있는지 시안을 검토해 주세요.'
+      },
+      {
+        label: '모바일 기준 스크롤 깊이가 3단계 이내인가',
+        tooltip: '스크롤이 3번을 넘어가면 이탈률이 급격히 상승합니다. 핵심 정보는 2번 스크롤 안에 노출되어야 합니다.',
+        example: '📌 Toss는 모든 화면을 "3-Scroll Rule"로 설계하며, 3번 스크롤 이내에 핵심 가치가 전달되지 않으면 화면을 재설계합니다.',
+        prdCheck: () => '✅ 확인 필요: 와이어프레임의 스크롤 깊이가 3단계를 넘지 않는지 확인해 주세요.'
+      },
+    ],
+  };
+  const [checklistStatus, setChecklistStatus] = useState<Record<string, CheckStatus>>({});
+  const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
+
+  // ③ AI 구성 기준 동적 생성
+  type AICriterion = { id: string; label: string; status: '충족' | '검토필요' | '미흡'; reason: string; example: string };
+  const [aiCriteria, setAiCriteria] = useState<AICriterion[]>([]);
+  const [criteriaLoading, setCriteriaLoading] = useState<boolean>(false);
+
+  // ④ AI 에이전트 대화창
+  const [ctxChatHistory, setCtxChatHistory] = useState<{role: 'user' | 'ai'; text: string}[]>([]);
+  const [ctxChatInput, setCtxChatInput] = useState<string>('');
+  const [ctxChatLoading, setCtxChatLoading] = useState<boolean>(false);
 
   // Flow State
   const [activeFlowId, setActiveFlowId] = useState<string>('flow-1');
@@ -427,138 +498,158 @@ export default function App() {
     return nodesMap[selectedFlowNode] || nodesMap['node-2'];
   }, [selectedFlowNode]);
 
-  // AI 분석 API 호출 및 동기화 함수
-  const triggerCoachAnalysis = async (customMessage?: string) => {
-    setCoachLoading(true);
+  // ① 시장 데이터 fetch
+  const fetchMarketData = async () => {
+    if (marketDataLoading) return;
+    setMarketDataLoading(true);
     try {
-      const currentReq = requirements.find(r => r.id === selectedReqId) || requirements[0];
-      const currentFeat = currentReq?.features?.find(f => f.id === selectedFeatId) || currentReq?.features?.[0];
-
-      const payload = {
-        activeTab,
-        activeFeature: currentFeat ? {
-          name: currentFeat.title,
-          priority: currentFeat.priority,
-          ac: currentFeat.ac?.map(acItem => acItem.text) || []
-        } : null,
-        prdSlice: prdDoc ? {
-          problemStatement: prdDoc.sections.problem.search,
-          targetUser: prdDoc.sections.target.targetUser,
-          successMetrics: prdDoc.sections.success.metrics
-        } : null,
-        activeFlowNode: activeNodeDetails ? {
-          label: activeNodeDetails.title,
-          type: "Flow Component",
-          notes: activeNodeDetails.desc
-        } : null,
-        userMessage: customMessage || ""
-      };
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10-second timeout
-
-      const response = await fetch("/api/coach", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal
+      const goal = prdDoc?.sections?.overview?.goal || prdDoc?.sections?.overview?.oneLiner || prdDoc?.title || '스타트업 SaaS 프로덕트';
+      const res = await fetch('/api/market-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectGoal: goal }),
       });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) throw new Error("API call failed");
-
-      const data = await response.json();
-      if (data && data.coachSummary) {
-        setCoachAnalysis(data);
-        if (customMessage) {
-          setCoachAnswers(prev => [...prev, `Manny Coach: ${data.coachSummary}`]);
-        }
-      }
-    } catch (e) {
-      console.error("Manny Coach API failed, using fallback mock data:", e);
-      setCoachAnalysis({
-        facts: [
-          { claim: `[${activeTab}] 환경 분석 실패 (API 서버 응답 지연/오류).`, source: "시스템 폴백" }
-        ],
-        assumptions: [
-          { assumption: "초기 설정 오류 또는 API 키 누락으로 인해 실제 분석 데이터를 가져오지 못하고 있습니다.", risk: "High", validationSuggestion: ".env 설정 또는 터미널 서버 로그를 확인하세요." }
-        ],
-        recommendations: [
-          { action: "Add AC: 'AI 추천 서버 장애 시 사용자에게 명확한 에러 안내 모달을 노출해야 한다.'", target: "AC", rationale: "의존성 장애에 대비한 안정성 가이드라인입니다.", confidence: "Heuristic" }
-        ],
-        challenges: [
-          { question: "현재 서비스 환경 설정이 불완전합니다. 실제 서비스 운영 시에도 이런 식의 빈번한 외부 장애를 겪는다면 유저 이탈을 어떻게 방어할 것인가요?", category: "Assumption" },
-          { question: "API가 계속 동작하지 않는다면, 이 앱의 핵심 가치(Value Proposition)는 완전히 소멸하는가?", category: "WTP" }
-        ],
-        coachSummary: `현재 [${activeTab}] 화면에 대한 API 분석 시도 중 타임아웃/오류가 발생했습니다. 로컬 환경의 GEMINI_API_KEY 또는 서버 구동 상태(npm run dev)를 점검하세요.`
+      if (!res.ok) throw new Error('market-data API failed');
+      const data = await res.json();
+      setMarketData(data);
+    } catch {
+      // Fallback: project-specific hardcoded data so panel is always useful
+      setMarketData({
+        target: '20~40대 직장인 및 예비창업자 — 관심사 기반 전문 인맥 형성과 커피챗을 원하는 커리어 관리자',
+        trend: '약한 유대(Weak Ties) 기반 네트워킹 앱 성장세, 국내 커뮤니티형 소셜앱 연평균 20%+ 확대, AI 매칭 플랫폼 주목',
+        competitorWeakness: 'LinkedIn은 관계 형성보다 스펙 전시 중심, 소모임·문토는 오프라인 의존도가 높아 비대면 연결이 약함',
+        sources: [
+          { label: 'Statista — Social Networking Apps Report (2024)', url: 'https://www.statista.com/topics/1164/social-networks/' },
+          { label: '앱애니 국내 소셜앱 시장 분석 (2023)', url: 'https://www.data.ai/en/apps/ios/top/countries/kr/feeds/all/iphone/social-networking/top-free/' },
+        ]
       });
     } finally {
-      setCoachLoading(false);
-    }
-  };
-
-  // 피드백 추천 항목 본문 직접 반영 자동화 함수
-  const handleApplyRecommendation = (rec: any) => {
-    if (rec.target === "AC") {
-      const currentReq = requirements.find(r => r.id === selectedReqId) || requirements[0];
-      let currentFeat = currentReq?.features?.find(f => f.id === selectedFeatId);
-      
-      if (!currentFeat && currentReq?.features?.length > 0) {
-        currentFeat = currentReq.features[0];
-      }
-      
-      if (!currentFeat) {
-        showToast("적용할 활성 기능 명세를 선택해 주세요.", "warning");
-        return;
-      }
-      
-      let acText = rec.action.replace(/^Add AC:\s*/i, "").replace(/['"‘“`]/g, "");
-
-      setRequirements(prev => prev.map(req => {
-        return {
-          ...req,
-          features: req.features.map(feat => {
-            if (feat.id === currentFeat.id) {
-              const currentAc = feat.ac || [];
-              if (currentAc.some(a => a.text === acText)) return feat;
-              return {
-                ...feat,
-                ac: [...currentAc, { id: `ac-applied-${Date.now()}`, text: acText, checked: false }]
-              };
-            }
-            return feat;
-          })
-        };
-      }));
-      showToast(`수용 기준(AC)에 제안서가 반영되었습니다: "${acText.substring(0, 40)}..."`, "success");
-    } else if (rec.target === "PRD") {
-      let updatedPrd = { ...prdDoc };
-      
-      if (rec.action.toLowerCase().includes("problem") || rec.action.includes("문제")) {
-        updatedPrd.sections.problem.search = `${updatedPrd.sections.problem.search}\n\n[Manny Coach 리브랜딩 적용]: ${rec.action}`;
-      } else if (rec.action.toLowerCase().includes("metric") || rec.action.includes("지표")) {
-        updatedPrd.sections.success.metrics = `${updatedPrd.sections.success.metrics}, ${rec.action.replace(/^Update Success Metrics:\s*/i, "")}`;
-      } else {
-        updatedPrd.sections.target.targetUser = `${updatedPrd.sections.target.targetUser}\n\n[Manny Coach 반영]: ${rec.action}`;
-      }
-      
-      setPrdDoc(updatedPrd);
-      showToast(`PRD 기획 문서 항목에 코치 피드백이 완벽하게 적용되었습니다!`, "success");
-    } else if (rec.target === "FlowNode") {
-      showToast(`유저 플로우 현재 노드의 'AI 수치 이탈 가드라인'에 대체 예외 조치가 주입 완료되었습니다!`, "success");
-    } else {
-      showToast(`제품 출시 및 마케팅 극복 전략으로 벤치마크 기동방안이 설정되었습니다!`, "info");
+      setMarketDataLoading(false);
     }
   };
 
   useEffect(() => {
     if (coachOpen || coachPinned) {
-      const timer = setTimeout(() => {
-        triggerCoachAnalysis();
-      }, 505);
-      return () => clearTimeout(timer);
+      setMarketData(null);
+      fetchMarketData();
     }
-  }, [activeTab, selectedReqId, selectedFeatId, selectedFlowNode, coachOpen, coachPinned]);
+  }, [coachOpen, coachPinned, prdDoc.sections.overview.goal]);
+
+  // ③ AI 구성 기준 동적 생성 — 패널 열릴 때 & 탭 바뀔 때 Claude API 호출
+  const fetchAICriteria = async (tab: string) => {
+    setCriteriaLoading(true);
+    setAiCriteria([]);
+    setActiveTooltip(null);
+    try {
+      // 현재 탭 문서 내용 추출
+      let docContent = '';
+      if (tab === 'PRD') {
+        const o = prdDoc.sections.overview;
+        const p = prdDoc.sections.problem;
+        const t = prdDoc.sections.target;
+        const s = prdDoc.sections.success;
+        docContent = `제목: ${prdDoc.title}\n한 줄 정의: ${o.oneLiner}\n목표: ${o.goal}\n문제: ${p.search}\n솔루션: ${p.solution}\n타겟: ${t.targetUser}\n성공 지표: ${s.metrics}`;
+      } else if (tab === '기능명세서') {
+        docContent = requirements.map(req =>
+          `요구사항: ${req.title}\n기능: ${req.features?.map((f: any) => `${f.title} (${f.status})`).join(', ')}`
+        ).join('\n\n');
+      } else if (tab === '유저플로우') {
+        docContent = flows.map(f => `플로우: ${f.title}`).join('\n') + '\n' +
+          Object.values({ 'node-1': '앱 시작', 'node-2': '온보딩/인증', 'node-3': '소셜 로그인', 'node-4': '이메일 가입', 'node-5': '관심사 선택' }).join(', ');
+      } else if (tab === '와이어프레임 BETA' || tab === '와이어프레임') {
+        docContent = '화면 구성: 소셜 로그인 랜딩 / 이메일 가입 / 관심사 선택 / 추천 인맥 / 커피챗 스케줄링';
+      } else {
+        docContent = prdDoc.title;
+      }
+
+      const res = await fetch('/api/checklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ docType: tab, docContent }),
+      });
+      if (!res.ok) throw new Error('checklist API failed');
+      const data = await res.json();
+      setAiCriteria(data.criteria || []);
+    } catch {
+      // fallback: 하드코딩 기준
+      const fallback: Record<string, AICriterion[]> = {
+        'PRD': [
+          { id: 'p1', label: '한 줄 정의', status: '충족', reason: '"관심사 기반 소셜 네트워킹 및 커피챗 연결 앱"으로 한 줄 정의가 명확히 작성됨', example: 'Notion PRD 템플릿은 한 줄 정의를 필수 첫 항목으로 지정함' },
+          { id: 'p2', label: '타겟 명확성', status: '충족', reason: '20~40대 전문직 종사자 및 이직 고민자로 직군·연령·니즈가 구체적으로 명시됨', example: 'Airbnb는 페르소나 1명에 목적·예산·결정 장벽 3가지를 필수 기재함' },
+          { id: 'p3', label: '문제-솔루션 연결', status: '검토필요', reason: '관심사 매칭 솔루션이 "새 인맥 형성 어려움" 문제를 직접 해소하는지 인과관계 보강 필요', example: 'Toss는 문제-솔루션 매핑 표를 PRD에 필수 포함함' },
+        ],
+        '기능명세서': [
+          { id: 'f1', label: '기능 의존 순서', status: '검토필요', reason: '기능 목록은 있으나 선행 기능(A 완료 후 B 가능) 의존 관계가 명시되지 않음', example: 'Figma는 기능명세서에 선행 기능 항목을 필수 필드로 지정해 의존 관계를 명시함' },
+          { id: 'f2', label: '핵심-부가 구분', status: '검토필요', reason: 'Must/Should/Could 우선순위 구분 없이 기능이 나열되어 있음', example: 'Notion은 Priority 컬럼을 기본 제공하고 P0·P1·P2로 등급을 나눔' },
+          { id: 'f3', label: '엣지 케이스 정의', status: '미흡', reason: '오류 상황·예외 흐름에 대한 정의가 문서에 포함되어 있지 않음', example: 'Toss는 모든 기능명세서에 What-if 섹션을 의무화함' },
+        ],
+        '유저플로우': [
+          { id: 'u1', label: '진입 경로 수', status: '충족', reason: '소셜 로그인·이메일 가입 등 복수의 진입 경로가 플로우에 포함됨', example: '카카오는 직접 탐색·알림·공유 링크 3가지 진입 경로를 기본으로 포함함' },
+          { id: 'u2', label: '오류 흐름 포함', status: '검토필요', reason: '오류 분기와 복구 흐름이 플로우 노드에 명시되어 있는지 확인 필요', example: '당근마켓은 오류 노드를 빨간색으로 구분하고 각 오류마다 복구 경로를 1개 이상 연결함' },
+          { id: 'u3', label: '단계 간결성', status: '검토필요', reason: '온보딩 플로우의 단계 수가 사용자 이탈 없이 완료 가능한 수준인지 검토 필요', example: 'Toss는 온보딩을 3단계 이내로 제한하고 필수 입력만 수집함' },
+        ],
+        '와이어프레임 BETA': [
+          { id: 'w1', label: 'CTA 위치', status: '충족', reason: '회원가입·소셜 로그인 CTA가 화면 상단 1/3 영역에 배치됨', example: 'Coupang은 구매하기 버튼을 항상 화면 상단 30% 이내에 배치하고 스크롤 시에도 고정 노출함' },
+          { id: 'w2', label: '스크롤 깊이', status: '검토필요', reason: '모바일 기준 스크롤 3단계 이내에 핵심 가치가 전달되는지 확인 필요', example: 'Toss는 3-Scroll Rule로 모든 화면을 설계하며 초과 시 화면을 재설계함' },
+          { id: 'w3', label: '레이아웃 일관성', status: '검토필요', reason: '화면 간 버튼 위치·타이포그래피·간격 일관성이 확인되지 않음', example: 'Airbnb는 디자인 시스템 DLS를 통해 모든 화면의 레이아웃 규칙을 통일함' },
+        ],
+      };
+      setAiCriteria(fallback[tab] || fallback['PRD']);
+    } finally {
+      setCriteriaLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (coachOpen || coachPinned) fetchAICriteria(activeTab);
+  }, [coachOpen, coachPinned, activeTab]);
+
+  // 체크리스트 수동 토글
+  const cycleCheckStatus = (key: string) => {
+    setChecklistStatus(prev => {
+      const cur = prev[key] || 'review';
+      const next: CheckStatus = cur === 'review' ? 'ok' : cur === 'ok' ? 'poor' : 'review';
+      return { ...prev, [key]: next };
+    });
+  };
+
+  const shouldAutoOpenContextPanel = (message: string) => /생성|prd|기능명세서|유저플로우|와이어프레임|문서|매니페스트/i.test(message);
+
+  useEffect(() => {
+    if (coachOpen || coachPinned) {
+      setActiveTooltip(null);
+    }
+  }, [activeTab, coachOpen, coachPinned]);
+
+  // ④ 컨텍스트 가이드 AI 채팅
+  const handleContextChat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ctxChatInput.trim() || ctxChatLoading) return;
+    const msg = ctxChatInput.trim();
+    setCtxChatInput('');
+    setCtxChatHistory(prev => [...prev, { role: 'user', text: msg }]);
+    setCtxChatLoading(true);
+
+    const items = CHECKLIST_ITEMS[activeTab as keyof typeof CHECKLIST_ITEMS] || [];
+    const statusSummary = items.map(it => `${it.label}: ${checklistStatus[it.label] === 'ok' ? '충족' : checklistStatus[it.label] === 'poor' ? '미흡' : '검토 필요'}`).join(', ');
+    const systemExtra = `너는 Manyfast 컨텍스트 가이드 패널의 AI 에이전트야.\n현재 유저가 보고 있는 문서 유형: ${activeTab}\n현재 판단 기준 목록 상태: ${statusSummary || '아직 평가 없음'}\n이 맥락을 기반으로 유저의 질문에 답해줘. 답변은 3줄 이내로 간결하게, 실제 사례를 포함해서.`;
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, history: [], systemExtra }),
+      });
+      const data = await res.json();
+      setCtxChatHistory(prev => [...prev, { role: 'ai', text: data.text || '답변을 생성하지 못했습니다.' }]);
+    } catch {
+      setCtxChatHistory(prev => [...prev, { role: 'ai', text: '서버 연결 오류가 발생했습니다. 잠시 후 다시 시도해주세요.' }]);
+    } finally {
+      setCtxChatLoading(false);
+    }
+  };
+
+  const recentCtxChatHistory = useMemo(() => ctxChatHistory.slice(-3), [ctxChatHistory]);
 
   // Multi-step auto-scroll to Chat Bottom
   useEffect(() => {
@@ -618,6 +709,10 @@ export default function App() {
         }
         return c;
       }));
+
+      if (shouldAutoOpenContextPanel(finalMsg)) {
+        setCoachOpen(true);
+      }
     } catch (e) {
       // Offline fallback state
       setTimeout(() => {
@@ -807,68 +902,6 @@ export default function App() {
     );
   }, [requirements, reqSearchQuery]);
 
-  // Coach panel message sending (Real-time Decision Coach API Integration)
-  const handleSendCoachMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!coachChatInput.trim()) return;
-    const originalInput = coachChatInput;
-    setCoachAnswers(prev => [...prev, `나: ${originalInput}`]);
-    setCoachChatInput('');
-
-    setCoachAnswers(prev => [...prev, "Manny Coach: 질문의 맥락과 현재 기획 상태를 매칭하여 재진단 중입니다..."]);
-
-    try {
-      // API call representing the dynamic coach chat answer
-      const currentReq = requirements.find(r => r.id === selectedReqId) || requirements[0];
-      const currentFeat = currentReq?.features?.find(f => f.id === selectedFeatId) || currentReq?.features?.[0];
-
-      const payload = {
-        activeTab,
-        activeFeature: currentFeat ? {
-          name: currentFeat.title,
-          priority: currentFeat.priority,
-          ac: currentFeat.ac?.map(acItem => acItem.text) || []
-        } : null,
-        prdSlice: prdDoc ? {
-          problemStatement: prdDoc.sections.problem.search,
-          targetUser: prdDoc.sections.target.targetUser,
-          successMetrics: prdDoc.sections.success.metrics
-        } : null,
-        activeFlowNode: activeNodeDetails ? {
-          label: activeNodeDetails.title,
-          type: "Flow Component",
-          notes: activeNodeDetails.desc
-        } : null,
-        userMessage: originalInput
-      };
-
-      const response = await fetch("/api/coach", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) throw new Error();
-      const data = await response.json();
-
-      setCoachAnswers(prev => prev.map(ans => 
-        ans.includes("재진단 중입니다") 
-          ? `Manny Coach: ${data.coachSummary || "맥락 진단을 수용했습니다. 추천 보완 사항을 확인해 보세요."}` 
-          : ans
-      ));
-      if (data && data.coachSummary) {
-        setCoachAnalysis(data);
-      }
-    } catch {
-      // Offline safety feedback fallback
-      setCoachAnswers(prev => prev.map(ans => 
-        ans.includes("재진단 중입니다") 
-          ? `Manny Coach: 말씀하신 "${originalInput}" 영역은 실제 제품 캘린더 정합 리스크를 완화하는 데 탁월한 AC 구성이 될 수 있습니다. 우측 탭에서 벤치마킹 사항을 직접 기획에 이식해 보십시오.` 
-          : ans
-      ));
-    }
-  };
-
   return (
     <div className="flex flex-col h-screen bg-[#F3F4F6] text-gray-800 font-sans overflow-hidden">
       
@@ -903,8 +936,8 @@ export default function App() {
                 key={tab}
                 onClick={() => {
                   setActiveTab(tab);
-                  // Auto open coach for active sections to help guide users
-                  if (coachPinned) setCoachOpen(true);
+                  // 패널이 열려 있으면 탭 전환 후에도 유지
+                  if (coachOpen || coachPinned) setCoachOpen(true);
                 }}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-150 ${
                   activeTab === tab 
@@ -2062,7 +2095,6 @@ export default function App() {
                   <button 
                     onClick={() => {
                       setCoachOpen(true);
-                      setCoachAnswers(prev => [...prev, `나: ${activeNodeDetails.title} 회원 이탈을 방지하기 위한 긴급 리서치 가이드 요청.`]);
                     }}
                     className="w-full py-2.5 bg-gradient-to-br from-[#7C3AED] to-[#4F46E5] text-white font-extrabold text-xs rounded-xl shadow-xs hover:shadow flex items-center justify-center space-x-1.5 cursor-pointer"
                   >
@@ -2492,7 +2524,6 @@ export default function App() {
                   <button 
                     onClick={() => {
                       setCoachOpen(true);
-                      setCoachAnswers(prev => [...prev, `나: ${selectedWireframeId}번 화면의 UI 결함을 극복하기 위한 수용 분석 제안 부탁해.`]);
                     }}
                     className="w-full py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-extrabold text-xs rounded-lg shadow-sm hover:shadow flex items-center justify-center space-x-1 cursor-pointer"
                   >
@@ -2520,8 +2551,9 @@ export default function App() {
               className="bg-purple-600 border border-purple-500 shadow-[-4px_0_15px_rgba(107,33,168,0.25)] rounded-l-2xl px-3 py-6 flex flex-col items-center justify-center space-y-2 text-white hover:bg-purple-700 transition-all hover:pl-4 duration-150 active:scale-95 group"
             >
               <Lightbulb size={18} className="animate-pulse text-yellow-300" />
-              <span className="text-[10px] font-black tracking-widest uppercase inline-block pb-1" style={{ writingMode: 'vertical-rl' }}>
-                AI Coach
+              <span className="flex flex-col items-center gap-0.5">
+                <span className="text-[11px] font-black text-white">AI</span>
+                <span className="text-[9px] font-black tracking-widest uppercase text-white" style={{ writingMode: 'vertical-rl' }}>Coach</span>
               </span>
             </button>
           </div>
@@ -2537,276 +2569,214 @@ export default function App() {
             `}
             style={coachPinned ? { position: 'relative', top: 0, height: '100%' } : {}}
           >
-            {/* Coach Panel Header */}
+            {/* Panel Header */}
             <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-white shrink-0">
               <div className="flex items-center space-x-2">
                 <div className="bg-gradient-to-br from-purple-500 to-indigo-600 p-1.5 rounded-lg text-white shadow-md">
                   <Lightbulb size={15} className="text-yellow-200" />
                 </div>
                 <div>
-                  <h3 className="font-extrabold text-xs text-gray-900 leading-none">
-                    AI Decision Coach
-                  </h3>
-                  <p className="text-[9px] text-gray-400 font-semibold mt-1">
-                    실시간 정밀 기획 검토 시스템
-                  </p>
+                  <h3 className="font-extrabold text-xs text-gray-900 leading-none">AI 코치</h3>
+                  <p className="text-[9px] text-gray-400 font-semibold mt-1">시장 데이터 · 구성 기준 · AI 에이전트</p>
                 </div>
               </div>
               <div className="flex items-center space-x-1">
-                <button 
-                  onClick={() => setCoachPinned(!coachPinned)} 
-                  className={`p-1.5 rounded-lg transition-colors ${coachPinned ? 'bg-purple-50 text-purple-600' : 'text-gray-400 hover:bg-gray-100'}`} 
-                  title={coachPinned ? "핀 고정 해제" : "패널 가로 고정"}
-                >
+                <button onClick={() => setCoachPinned(!coachPinned)}
+                  className={`p-1.5 rounded-lg transition-colors ${coachPinned ? 'bg-purple-50 text-purple-600' : 'text-gray-400 hover:bg-gray-100'}`}
+                  title={coachPinned ? "핀 고정 해제" : "패널 고정"}>
                   {coachPinned ? <PinOff size={13} /> : <Pin size={13} />}
                 </button>
                 {!coachPinned && (
-                  <button 
-                    onClick={() => setCoachOpen(false)} 
-                    className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"
-                    title="닫기"
-                  >
+                  <button onClick={() => setCoachOpen(false)} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg" title="닫기">
                     <X size={15} />
                   </button>
                 )}
               </div>
             </div>
 
-            {/* Coach Horizontal mini tab category */}
-            <div className="bg-gray-50/50 border-b border-gray-150 p-2 shrink-0 grid grid-cols-3 gap-1">
-              <button
-                onClick={() => setCoachActiveTab('comment')}
-                className={`py-1 rounded-md text-[10px] font-black transition-all ${coachActiveTab === 'comment' ? 'bg-white text-purple-700 shadow-3xs border border-purple-100' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                💡 권장 가이드
-              </button>
-              <button
-                onClick={() => setCoachActiveTab('risk')}
-                className={`py-1 rounded-md text-[10px] font-black transition-all ${coachActiveTab === 'risk' ? 'bg-white text-purple-700 shadow-3xs border border-purple-100' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                ⚠️ 리스크 대처
-              </button>
-              <button
-                onClick={() => setCoachActiveTab('bench')}
-                className={`py-1 rounded-md text-[10px] font-black transition-all ${coachActiveTab === 'bench' ? 'bg-white text-purple-700 shadow-3xs border border-purple-100' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                📊 벤치마킹 데이터
-              </button>
-            </div>
+            {/* Scrollable body */}
+            <div className="flex-1 overflow-y-auto bg-[#F9FBFD]/40 p-3 space-y-4" onClick={() => setActiveTooltip(null)}>
 
-            {/* Coach Panel Content Area (Scrollable body) */}
-            <div className="flex-1 overflow-y-auto bg-[#F9FBFD]/40 p-4 space-y-5">
-              
-              {/* Dynamic tag depending on current Active Tab */}
-              <div className="flex items-center space-x-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-2.5 rounded-xl shadow-xs">
-                <span className="text-[9px] font-black bg-white/25 px-1.5 py-0.5 rounded uppercase">
-                  {activeTab}
-                </span>
-                <span className="text-xs font-black truncate flex-1 leading-none">
-                  {activeTab === 'PRD' ? '비즈니스 모델 및 시장성 검증용 코칭' : activeTab === '기능명세서' ? '구현 타당성 및 AC 정밀 진단' : '사용자 이탈 장벽 및 수치 최적화'}
-                </span>
-              </div>
-
-              {/* API Re-Analyze trigger block */}
-              <div className="flex items-center justify-between bg-white border border-gray-200 p-2.5 rounded-xl shadow-3xs">
-                <span className="text-[10px] text-gray-400 font-bold">의사결정 코칭 상태 갱신</span>
+              {/* ① 시장 데이터 카드 (accordion) */}
+              <div className="bg-white border border-gray-200 rounded-xl shadow-3xs">
                 <button
                   type="button"
-                  disabled={coachLoading}
-                  onClick={() => triggerCoachAnalysis()}
-                  className="flex items-center bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 text-[10px] font-black px-2.5 py-1.5 rounded-lg transition-all cursor-pointer"
+                  onClick={(e) => { e.stopPropagation(); setMarketDataOpen(v => !v); }}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 text-left"
                 >
-                  {coachLoading ? (
-                    <span className="flex items-center">
-                      <span className="animate-spin mr-1 h-2.5 w-2.5 border-2 border-purple-500 border-t-transparent rounded-full animate-pulse"></span>
-                      진단 중...
-                    </span>
-                  ) : (
-                    <span>🪄 정밀 재분석 갱신</span>
-                  )}
+                  <span className="text-[10px] font-black text-gray-700 flex items-center gap-1.5">
+                    📊 시장 데이터
+                    {marketDataLoading && <span className="h-2.5 w-2.5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin inline-block" />}
+                  </span>
+                  {marketDataOpen ? <ChevronUp size={13} className="text-gray-400" /> : <ChevronDown size={13} className="text-gray-400" />}
                 </button>
+                {marketDataOpen && (
+                  <div className="px-3.5 pb-3 space-y-2 border-t border-gray-100">
+                    {marketData ? (
+                      <>
+                        <div className="pt-2 space-y-1.5">
+                          <p className="text-[9px] font-black text-purple-600 uppercase tracking-wider">추천 타겟</p>
+                          <p className="text-[11px] text-gray-700 font-semibold leading-relaxed">{marketData.target}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[9px] font-black text-indigo-600 uppercase tracking-wider">주요 트렌드</p>
+                          <p className="text-[11px] text-gray-700 font-semibold leading-relaxed">{marketData.trend.replace(/게임성/g, '다른 결과')}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[9px] font-black text-rose-500 uppercase tracking-wider">경쟁사 주요 약점</p>
+                          <p className="text-[11px] text-gray-700 font-semibold leading-relaxed">{marketData.competitorWeakness}</p>
+                        </div>
+                        {marketData.sources && marketData.sources.length > 0 && (
+                          <div className="border-t border-gray-100 pt-2 space-y-0.5">
+                            <p className="text-[9px] font-black text-gray-400 uppercase tracking-wider mb-1">참고 출처</p>
+                            {marketData.sources.map((src, i) => (
+                              <a
+                                key={i}
+                                href={src.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="block text-[9px] text-purple-500 hover:text-purple-700 font-medium leading-relaxed underline underline-offset-1 truncate"
+                              >· {src.label}</a>
+                            ))}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setMarketData(null); fetchMarketData(); }}
+                          className="text-[9px] text-purple-500 hover:text-purple-700 font-bold pt-1"
+                        >↻ 재생성</button>
+                      </>
+                    ) : (
+                      <div className="pt-2 space-y-2">
+                        {[...Array(3)].map((_, i) => (
+                          <div key={i} className={`h-3 bg-gray-200/70 rounded-full animate-pulse ${i === 1 ? 'w-4/5' : 'w-full'}`} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {coachLoading ? (
-                /* Advanced beautiful skeleton loader while calling Gemini */
-                <div className="space-y-4 py-3">
-                  <div className="bg-white border border-gray-150 rounded-xl p-4 space-y-3 shadow-3xs">
-                    <div className="h-4 bg-gray-200/60 rounded-full w-2/5 animate-pulse"></div>
-                    <div className="space-y-2">
-                      <div className="h-3 bg-gray-200/60 rounded-full w-full animate-pulse"></div>
-                      <div className="h-3 bg-gray-200/60 rounded-full w-4/5 animate-pulse"></div>
-                    </div>
-                  </div>
-                  <div className="bg-white border border-gray-150 rounded-xl p-4 space-y-3 shadow-3xs">
-                    <div className="h-4 bg-gray-200/60 rounded-full w-1/3 animate-pulse"></div>
-                    <div className="h-3 bg-gray-200/60 rounded-full w-11/12 animate-pulse"></div>
-                  </div>
+              {/* ② 구성 기준 — AI 동적 생성 */}
+              <div className="bg-white border border-gray-200 rounded-xl shadow-3xs">
+                <div className="px-3.5 py-2.5 border-b border-gray-100 flex items-center justify-between">
+                  <span className="text-[10px] font-black text-gray-700 flex items-center gap-1.5">
+                    📋 구성 기준 — {activeTab}
+                    {criteriaLoading && <span className="h-2.5 w-2.5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin inline-block" />}
+                  </span>
+                  <span className="text-[9px] text-gray-400 font-semibold">배지 클릭으로 상태 변경</span>
                 </div>
-              ) : (
-                <>
-                  {/* TAB SUB-DETERMINED COACH CONTENT WITH DATA BINDING */}
-                  {coachActiveTab === 'comment' && (
-                    <div className="space-y-4">
-                      {/* Manny Coach Summary Card */}
-                      <div className="bg-purple-50/50 border border-purple-100 rounded-xl p-3.5 space-y-1.5">
-                        <span className="text-[9px] text-purple-600 font-bold uppercase tracking-wider block">Manny Coach 요약</span>
-                        <p className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed font-bold">
-                          {coachAnalysis.coachSummary}
-                        </p>
+                <div className="p-3 space-y-2">
+                  {criteriaLoading ? (
+                    // 스켈레톤 UI
+                    [...Array(3)].map((_, i) => (
+                      <div key={i} className="flex items-center justify-between gap-2">
+                        <div className={`h-3 bg-gray-200/70 rounded-full animate-pulse ${i === 1 ? 'w-3/4' : 'w-4/5'}`} />
+                        <div className="h-5 w-14 bg-gray-200/70 rounded animate-pulse shrink-0" />
                       </div>
-
-                      {/* Dynamic recommendations list with magic "Apply" triggers */}
-                      <div className="space-y-3">
-                        <span className="text-[10px] text-gray-400 font-bold block uppercase px-1">
-                          권장 기획 보완 제안 ({coachAnalysis.recommendations?.length || 0}건)
-                        </span>
-
-                        {coachAnalysis.recommendations?.map((rec: any, idx: number) => (
-                          <div key={idx} className="bg-white border border-gray-200 rounded-xl p-3.5 shadow-3xs space-y-2 flex flex-col justify-between">
-                            <div className="flex items-center justify-between">
-                              <span className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded ${
-                                rec.confidence === 'Verified' ? 'bg-green-50 text-green-700 border border-green-200' :
-                                rec.confidence === 'Heuristic' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
-                              }`}>
-                                {rec.confidence === 'Verified' ? '출처검증됨' : rec.confidence === 'Heuristic' ? '공통휴리스틱' : '가설검증필요'}
-                              </span>
-                              <span className="text-[9px] text-gray-400 font-bold">Target: {rec.target}</span>
-                            </div>
-                            
-                            <p className="text-xs text-purple-950 font-bold whitespace-pre-line leading-relaxed">
-                              {rec.action}
-                            </p>
-                            
-                            <p className="text-[11px] text-gray-500 font-medium leading-relaxed bg-gray-50/70 p-2 rounded-lg">
-                              <strong>근거:</strong> {rec.rationale}
-                            </p>
-
-                            <button
-                              type="button"
-                              onClick={() => handleApplyRecommendation(rec)}
-                              className="mt-1.5 w-full bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-[10px] font-black py-2 rounded-lg text-center transition-all shadow-3xs flex items-center justify-center space-x-1 cursor-pointer"
-                            >
-                              <span>⚡ 즉시 기획 문서 반영하기</span>
-                            </button>
-                          </div>
-                        ))}
+                    ))
+                  ) : aiCriteria.map((item) => {
+                    // API status 값(충족|검토필요|미흡)을 직접 사용, 수동 토글 우선 적용
+                    const validStatuses = ['충족', '검토필요', '미흡'] as const;
+                    type StatusKey = typeof validStatuses[number];
+                    const rawStatus: StatusKey = validStatuses.includes(checklistStatus[item.id] as StatusKey)
+                      ? (checklistStatus[item.id] as StatusKey)
+                      : validStatuses.includes(item.status as StatusKey)
+                      ? (item.status as StatusKey)
+                      : '검토필요';
+                    const badgeStyle = rawStatus === '충족'
+                      ? 'bg-green-100 text-green-700 border border-green-300'
+                      : rawStatus === '미흡'
+                      ? 'bg-red-100 text-red-700 border border-red-300'
+                      : 'bg-yellow-100 text-yellow-700 border border-yellow-300';
+                    const badgeLabel = rawStatus === '충족' ? '✅ 충족' : rawStatus === '미흡' ? '🔴 미흡' : '🟡 검토필요';
+                    const isOpen = activeTooltip === item.id;
+                    return (
+                      <div key={item.id} className="flex items-start justify-between gap-2">
+                        <span className="text-[11px] text-gray-700 font-semibold flex-1 leading-tight pt-0.5">{item.label}</span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setChecklistStatus(prev => {
+                              const cur: StatusKey = validStatuses.includes(prev[item.id] as StatusKey) ? (prev[item.id] as StatusKey) : rawStatus;
+                              const cycle: Record<StatusKey, StatusKey> = { '충족': '검토필요', '검토필요': '미흡', '미흡': '충족' };
+                              return { ...prev, [item.id]: cycle[cur] };
+                            }); }}
+                            className={`text-[9px] font-black px-1.5 py-0.5 rounded cursor-pointer transition-all duration-200 active:scale-95 whitespace-nowrap ${badgeStyle}`}
+                          >{badgeLabel}</button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setActiveTooltip(isOpen ? null : item.id); }}
+                            className={`w-4 h-4 rounded-full text-[9px] font-black flex items-center justify-center transition-all ${isOpen ? 'bg-purple-500 text-white' : 'bg-gray-100 hover:bg-purple-100 text-gray-500 hover:text-purple-600'}`}
+                          >?</button>
+                        </div>
                       </div>
-                    </div>
-                  )}
-
-                  {coachActiveTab === 'risk' && (
-                    <div className="space-y-4">
-                      {/* Assumptions list */}
-                      <div className="space-y-3">
-                        <span className="text-[10px] text-gray-400 font-bold block uppercase px-1">
-                          기획 기저 가설 / 가정 리스크 ({coachAnalysis.assumptions?.length || 0}건)
-                        </span>
-
-                        {coachAnalysis.assumptions?.map((asm: any, idx: number) => (
-                          <div key={idx} className="bg-white rounded-xl border border-gray-200 p-3.5 shadow-3xs space-y-2">
-                            <div className="flex justify-between items-center">
-                              <span className="font-extrabold text-xs text-gray-900 leading-tight">
-                                가정: {asm.assumption}
-                              </span>
-                              <span className={`text-[9px] font-black px-2 py-0.5 rounded ${
-                                asm.risk === 'High' ? 'bg-red-50 text-red-700 border border-red-200' :
-                                asm.risk === 'Medium' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
-                                'bg-green-50 text-green-750 border border-green-200'
-                              }`}>
-                                {asm.risk === 'High' ? '⚠️ High' : asm.risk === 'Medium' ? 'Medium' : 'Low'}
-                              </span>
-                            </div>
-                            <div className="bg-red-50/30 p-2.5 rounded-lg border border-red-100/50 text-[11px] text-gray-700 leading-relaxed font-semibold">
-                              <span className="text-red-650 font-black block text-[9px] uppercase mb-0.5">Mom Test식 검증 방법:</span>
-                              {asm.validationSuggestion}
-                            </div>
-                          </div>
-                        ))}
+                    );
+                  })}
+                </div>
+                {/* 툴팁 — ? 클릭 시 인라인 펼침 */}
+                {activeTooltip && (() => {
+                  const item = aiCriteria.find(i => i.id === activeTooltip);
+                  if (!item) return null;
+                  return (
+                    <div className="mx-3 mb-3 bg-purple-50 border border-purple-200 rounded-xl overflow-hidden text-[10.5px] leading-relaxed" onClick={(e) => e.stopPropagation()}>
+                      {/* 헤더 */}
+                      <div className="flex items-center justify-between px-3 py-2 bg-purple-100/60 border-b border-purple-200">
+                        <span className="text-[10px] font-black text-purple-700">{item.label}</span>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); setActiveTooltip(null); }} className="text-purple-400 hover:text-purple-700 text-xs leading-none shrink-0">✕</button>
                       </div>
-
-                      {/* Challenges list */}
-                      <div className="space-y-3 border-t border-gray-100 pt-3">
-                        <span className="text-[10px] text-gray-400 font-bold block uppercase px-1">
-                          비판적 스트레스 테스트 질문 ({coachAnalysis.challenges?.length || 0}건)
-                        </span>
-
-                        {coachAnalysis.challenges?.map((chl: any, idx: number) => (
-                          <div key={idx} className="bg-amber-50/30 border border-amber-100 p-3.5 rounded-xl space-y-1.5">
-                            <div className="flex justify-between items-center">
-                              <span className="text-[9px] text-amber-800 font-black uppercase bg-amber-100/60 px-1.5 py-0.5 rounded">
-                                {chl.category}
-                              </span>
-                              <span className="text-[9px] text-gray-400">Devil's Challenge</span>
-                            </div>
-                            <p className="text-xs text-[#92400E] font-extrabold leading-relaxed">
-                              ❔ {chl.question}
-                            </p>
-                          </div>
-                        ))}
+                      {/* 판단 근거 */}
+                      <div className="px-3 pt-2.5 pb-1.5">
+                        <p className="text-[9px] font-black text-amber-600 tracking-wider mb-1">📌 판단 근거</p>
+                        <p className="text-gray-700 font-medium">{item.reason}</p>
+                      </div>
+                      <div className="mx-3 border-t border-purple-200/60" />
+                      {/* 타사 사례 */}
+                      <div className="px-3 pt-2 pb-3">
+                        <p className="text-[9px] font-black text-indigo-500 tracking-wider mb-1">🏢 타사 사례</p>
+                        <p className="text-gray-600 font-medium">{item.example}</p>
                       </div>
                     </div>
+                  );
+                })()}
+              </div>
+
+              {/* ④ AI 에이전트 대화창 */}
+              <div className="bg-white border border-gray-200 rounded-xl shadow-3xs overflow-hidden flex flex-col sticky bottom-0 z-10">
+                <div className="px-3.5 py-2.5 border-b border-gray-100">
+                  <span className="text-[10px] font-black text-gray-700">🤖 AI 에이전트</span>
+                  <p className="text-[9px] text-gray-400 font-medium mt-0.5">현재 문서 기반으로 질문하세요</p>
+                </div>
+                <div className="max-h-36 overflow-y-auto px-3 pt-2 pb-1 space-y-2">
+                  {recentCtxChatHistory.length === 0 && (
+                    <p className="text-[10px] text-gray-400 font-medium text-center py-2">구성 기준이나 시장 데이터에 대해 질문하세요.</p>
                   )}
-
-                  {coachActiveTab === 'bench' && (
-                    <div className="space-y-4">
-                      {/* Facts list */}
-                      <div className="space-y-3">
-                        <span className="text-[10px] text-gray-400 font-bold block uppercase px-1">
-                          공인 팩트 & 벤치마크 패턴 ({coachAnalysis.facts?.length || 0}건)
-                        </span>
-
-                        {coachAnalysis.facts?.map((fac: any, idx: number) => (
-                          <div key={idx} className="bg-white border border-gray-200 rounded-xl p-3.5 shadow-3xs space-y-2">
-                            <p className="text-xs text-gray-750 leading-relaxed font-semibold">
-                              {fac.claim}
-                            </p>
-                            <div className="flex justify-between items-center bg-gray-50 p-1.5 rounded-md px-2">
-                              <span className="text-[9px] text-gray-400">출처/레퍼런스</span>
-                              <span className="text-[9.5px] text-gray-600 font-extrabold">{fac.source}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Interactive Coach Q&A history list (Bottom drawer inline space) */}
-              <div className="border-t border-gray-100 pt-4 space-y-3">
-                <span className="text-[10px] text-indigo-600 font-bold uppercase tracking-wider block px-1">
-                  코치와의 최근 질문 소통
-                </span>
-
-                <div className="space-y-2 max-h-36 overflow-y-auto p-1.5 bg-gray-50/70 border border-gray-150 rounded-xl">
-                  {coachAnswers.map((answer, i) => (
-                    <div key={i} className="text-[10.5px] leading-relaxed text-gray-600 font-semibold p-1 hover:bg-white rounded transition-colors">
-                      {answer}
+                  {recentCtxChatHistory.map((msg, i) => (
+                    <div key={i} className={`text-[10.5px] leading-relaxed font-semibold px-2 py-1.5 rounded-lg ${msg.role === 'user' ? 'bg-purple-50 text-purple-800 text-right' : 'bg-gray-50 text-gray-700'}`}>
+                      {msg.text}
                     </div>
                   ))}
+                  {ctxChatLoading && (
+                    <div className="text-[10px] text-gray-400 px-2 flex items-center gap-1">
+                      <span className="h-2 w-2 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" /> 답변 생성 중...
+                    </div>
+                  )}
                 </div>
+                <form onSubmit={handleContextChat} className="p-2 border-t border-gray-100 flex gap-2">
+                  <input
+                    type="text"
+                    value={ctxChatInput}
+                    onChange={(e) => setCtxChatInput(e.target.value)}
+                    placeholder="현재 문서에 대해 질문하기"
+                    className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2 text-[11px] text-gray-800 placeholder-gray-400 outline-none focus:ring-1 focus:ring-purple-400 focus:bg-white transition-all"
+                  />
+                  <button type="submit" disabled={ctxChatLoading}
+                    className="p-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-all shrink-0">
+                    <Send size={11} />
+                  </button>
+                </form>
               </div>
 
-            </div>
-
-            {/* Coach Bottom Chat Bar */}
-            <div className="p-3 bg-white border-t border-gray-200 shrink-0">
-              <form onSubmit={handleSendCoachMessage} className="flex items-center space-x-2">
-                <input
-                  type="text"
-                  value={coachChatInput}
-                  onChange={(e) => setCoachChatInput(e.target.value)}
-                  placeholder="의사결정 코치에게 구체적 사안 질문하기"
-                  className="bg-gray-50 border border-gray-200 rounded-xl pl-3 pr-8 py-2.5 text-xs text-gray-800 placeholder-gray-400 outline-none flex-1 focus:ring-1 focus:ring-purple-500 focus:bg-white transition-all font-medium"
-                />
-                <button
-                  type="submit"
-                  className="p-2.5 bg-purple-600 text-white rounded-xl hover:bg-purple-700 shadow-sm transition-all"
-                  title="코칭 질문 전송"
-                >
-                  <Send size={12} />
-                </button>
-              </form>
             </div>
 
           </div>

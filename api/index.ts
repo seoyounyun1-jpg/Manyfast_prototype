@@ -1,14 +1,10 @@
 import express from "express";
-import path from "path";
-import { createServer as createViteServer } from "vite";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
-
 app.use(express.json());
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -34,7 +30,7 @@ Follow these behavioral rules:
    - Recommendation Confidence levels MUST be 'Verified' (backed by specific source), 'Heuristic' (common PM practice), or 'Hypothesis' (logical inference, needs validation).
 5. Actionable Over Advisory:
    - Each recommendation must specify exact 'target' ('AC' | 'PRD' | 'FlowNode' | 'Strategy') so the frontend can offer an apply action.
-   - Recommendations must be highly specific, actionable text. Instead of "consider fallback", write "Add AC: '태그 검색 결과가 없을 경우, 유사 인기 관심사 태그 Top 5 자동 추천 노출'".
+   - Recommendations must be highly specific, actionable text.
 
 Provide all output texts in Korean (한국어로 상세하고 까칠하게 작성).
 `;
@@ -77,7 +73,7 @@ app.post("/api/coach", async (req, res) => {
     const result = JSON.parse(jsonMatch[0]);
     res.write(`data: ${JSON.stringify({ done: true, result })}\n\n`);
   } catch (error: any) {
-    console.error("AI Coach API execution failed:", error);
+    console.error("AI Coach API error:", error);
     res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
   } finally {
     res.end();
@@ -113,154 +109,29 @@ app.post("/api/chat", async (req, res) => {
     const text = response.content.find((b) => b.type === "text");
     res.json({ text: text?.type === "text" ? text.text : "답변을 생성하지 못했습니다." });
   } catch (error: any) {
-    console.error("General chat API failed:", error);
+    console.error("Chat API error:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
 app.post("/api/market-data", async (req, res) => {
   const { projectGoal } = req.body;
-
   try {
-    const message = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 500,
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 400,
+      system: "You are a concise market analyst. Respond ONLY with valid JSON, no other text.",
       messages: [{
         role: "user",
-        content: `다음 기획 목적을 가진 서비스의 시장 데이터를 분석해줘: "${projectGoal}"
-
-아래 JSON 형식으로만 답해줘. 다른 텍스트 없이.
-비공식적 표현(빡빡이, 게임성 등)은 절대 사용하지 마세요. 실무 보고서 수준의 표현을 사용하세요.
-{
-  "target": "추천 타겟 사용자 1~2줄 (직군·연령·니즈 포함)",
-  "trend": "관련 시장 트렌드 1~2줄 (수치 또는 키워드 포함)",
-  "competitorWeakness": "주요 경쟁사 약점 1줄",
-  "sources": [{"label": "출처명 (연도)", "url": "https://실제URL"}]
-}`
+        content: `프로젝트 목표: "${projectGoal}"\n\n이 프로젝트의 시장 분석을 아래 JSON 형식으로만 답해줘:\n{"target":"타겟 요약 1줄","trend":"시장 트렌드 키워드 1~2줄","competitorWeakness":"경쟁사 주요 약점 1줄"}`
       }],
     });
-
-    const content = message.content[0];
-    if (content.type === "text") {
-      try {
-        const jsonMatch = content.text.match(/\{[\s\S]*\}/);
-        const data = JSON.parse(jsonMatch ? jsonMatch[0] : content.text);
-        res.json(data);
-      } catch {
-        res.status(500).json({ error: "Parse error", raw: content.text });
-      }
-    } else {
-      res.status(500).json({ error: "No text content" });
-    }
+    const text = response.content.find(b => b.type === "text");
+    const json = JSON.parse((text as any).text.match(/\{[\s\S]*\}/)[0]);
+    res.json(json);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-const ALLOWED_LABELS: Record<string, string[]> = {
-  'PRD': ['타겟 명확성', '문제-솔루션 연결', '한 줄 정의'],
-  '기능명세서': ['기능 의존 순서', '핵심-부가 구분', '엣지 케이스 정의'],
-  '유저플로우': ['진입 경로 수', '오류 흐름 포함', '단계 간결성'],
-  '와이어프레임': ['CTA 위치', '스크롤 깊이', '레이아웃 일관성'],
-};
-const VALID_STATUSES = ['충족', '검토필요', '미흡'];
-
-app.post("/api/checklist", async (req, res) => {
-  const { docType, docContent } = req.body;
-  try {
-    const message = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 800,
-      system: `당신은 스타트업 기획 PM입니다. 사용자가 작성 중인 문서를 분석해 판단 기준을 JSON으로만 반환하세요. 다른 텍스트 없이 JSON만 출력하세요.
-
-응답 형식:
-{
-  "criteria": [
-    {
-      "id": "c1",
-      "label": "아래 허용 목록에서 정확히 복사한 값",
-      "status": "충족" | "검토필요" | "미흡",
-      "reason": "이 문서에서 해당 기준을 충족/미충족하는 구체적 근거 1문장",
-      "example": "실제 서비스 적용 사례 1문장 (Figma, Notion, Toss, 카카오 등)"
-    }
-  ]
-}
-
-label 규칙 (반드시 준수):
-- label은 아래 허용 목록에서만 선택. 절대 새로 만들거나 변형하지 말 것.
-- PRD 탭: ["타겟 명확성", "문제-솔루션 연결", "한 줄 정의"]
-- 기능명세서 탭: ["기능 의존 순서", "핵심-부가 구분", "엣지 케이스 정의"]
-- 유저플로우 탭: ["진입 경로 수", "오류 흐름 포함", "단계 간결성"]
-- 와이어프레임 탭: ["CTA 위치", "스크롤 깊이", "레이아웃 일관성"]
-
-추가 규칙:
-- status 값은 반드시 "충족", "검토필요", "미흡" 중 하나만 사용 (다른 값 절대 금지)
-- reason은 실제 문서 내용을 직접 인용해서 작성
-- example은 Figma, Notion, Toss, 카카오, 당근마켓 등 실제 서비스 사례만 사용`,
-      messages: [{
-        role: "user",
-        content: `문서 유형: ${docType}\n\n문서 내용:\n${docContent}`
-      }],
-    });
-    const content = message.content[0];
-    if (content.type === "text") {
-      try {
-        const jsonMatch = content.text.match(/\{[\s\S]*\}/);
-        const data = JSON.parse(jsonMatch ? jsonMatch[0] : content.text);
-        // 서버에서 label/status 강제 검증
-        const allowed = ALLOWED_LABELS[docType] || ALLOWED_LABELS['PRD'];
-        if (Array.isArray(data.criteria)) {
-          data.criteria = data.criteria.map((c: any, i: number) => ({
-            ...c,
-            label: allowed.includes(c.label) ? c.label : allowed[i % allowed.length],
-            status: VALID_STATUSES.includes(c.status) ? c.status : '검토필요',
-          }));
-        }
-        res.json(data);
-      } catch {
-        res.status(500).json({ error: "Parse error" });
-      }
-    } else {
-      res.status(500).json({ error: "No text content" });
-    }
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
-
-  const listenOnPort = (port: number) => {
-    const server = app.listen(port, "0.0.0.0", () => {
-      console.log(`Server is running on port ${port}`);
-    });
-
-    server.on("error", (error: any) => {
-      if (error.code === "EADDRINUSE") {
-        const nextPort = port + 1;
-        console.warn(`Port ${port} is busy, trying ${nextPort} instead.`);
-        listenOnPort(nextPort);
-      } else {
-        console.error(error);
-        process.exit(1);
-      }
-    });
-  };
-
-  listenOnPort(Number(process.env.PORT || PORT));
-}
-
-startServer();
+export default app;
